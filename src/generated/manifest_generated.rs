@@ -861,7 +861,7 @@ impl<'a> ManifestV1<'a> {
   pub const VT_L0_LAST_COMPACTED: flatbuffers::VOffsetT = 14;
   pub const VT_L0: flatbuffers::VOffsetT = 16;
   pub const VT_COMPACTED: flatbuffers::VOffsetT = 18;
-  pub const VT_SNAPSHOTS: flatbuffers::VOffsetT = 20;
+  pub const VT_CHECKPOINTS: flatbuffers::VOffsetT = 20;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -878,7 +878,7 @@ impl<'a> ManifestV1<'a> {
     builder.add_compactor_epoch(args.compactor_epoch);
     builder.add_writer_epoch(args.writer_epoch);
     builder.add_manifest_id(args.manifest_id);
-    if let Some(x) = args.snapshots { builder.add_snapshots(x); }
+    if let Some(x) = args.checkpoints { builder.add_checkpoints(x); }
     if let Some(x) = args.compacted { builder.add_compacted(x); }
     if let Some(x) = args.l0 { builder.add_l0(x); }
     if let Some(x) = args.l0_last_compacted { builder.add_l0_last_compacted(x); }
@@ -943,11 +943,11 @@ impl<'a> ManifestV1<'a> {
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SortedRun>>>>(ManifestV1::VT_COMPACTED, None).unwrap()}
   }
   #[inline]
-  pub fn snapshots(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Snapshot<'a>>>> {
+  pub fn checkpoints(&self) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Checkpoint<'a>>> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Snapshot>>>>(ManifestV1::VT_SNAPSHOTS, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Checkpoint>>>>(ManifestV1::VT_CHECKPOINTS, None).unwrap()}
   }
 }
 
@@ -966,7 +966,7 @@ impl flatbuffers::Verifiable for ManifestV1<'_> {
      .visit_field::<flatbuffers::ForwardsUOffset<CompactedSstId>>("l0_last_compacted", Self::VT_L0_LAST_COMPACTED, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<CompactedSsTable>>>>("l0", Self::VT_L0, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SortedRun>>>>("compacted", Self::VT_COMPACTED, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Snapshot>>>>("snapshots", Self::VT_SNAPSHOTS, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Checkpoint>>>>("checkpoints", Self::VT_CHECKPOINTS, true)?
      .finish();
     Ok(())
   }
@@ -980,7 +980,7 @@ pub struct ManifestV1Args<'a> {
     pub l0_last_compacted: Option<flatbuffers::WIPOffset<CompactedSstId<'a>>>,
     pub l0: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<CompactedSsTable<'a>>>>>,
     pub compacted: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SortedRun<'a>>>>>,
-    pub snapshots: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Snapshot<'a>>>>>,
+    pub checkpoints: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Checkpoint<'a>>>>>,
 }
 impl<'a> Default for ManifestV1Args<'a> {
   #[inline]
@@ -994,7 +994,7 @@ impl<'a> Default for ManifestV1Args<'a> {
       l0_last_compacted: None,
       l0: None, // required field
       compacted: None, // required field
-      snapshots: None,
+      checkpoints: None, // required field
     }
   }
 }
@@ -1037,8 +1037,8 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ManifestV1Builder<'a, 'b, A> {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ManifestV1::VT_COMPACTED, compacted);
   }
   #[inline]
-  pub fn add_snapshots(&mut self, snapshots: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<Snapshot<'b >>>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ManifestV1::VT_SNAPSHOTS, snapshots);
+  pub fn add_checkpoints(&mut self, checkpoints: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<Checkpoint<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ManifestV1::VT_CHECKPOINTS, checkpoints);
   }
   #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ManifestV1Builder<'a, 'b, A> {
@@ -1053,6 +1053,7 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ManifestV1Builder<'a, 'b, A> {
     let o = self.fbb_.end_table(self.start_);
     self.fbb_.required(o, ManifestV1::VT_L0,"l0");
     self.fbb_.required(o, ManifestV1::VT_COMPACTED,"compacted");
+    self.fbb_.required(o, ManifestV1::VT_CHECKPOINTS,"checkpoints");
     flatbuffers::WIPOffset::new(o.value())
   }
 }
@@ -1068,7 +1069,7 @@ impl core::fmt::Debug for ManifestV1<'_> {
       ds.field("l0_last_compacted", &self.l0_last_compacted());
       ds.field("l0", &self.l0());
       ds.field("compacted", &self.compacted());
-      ds.field("snapshots", &self.snapshots());
+      ds.field("checkpoints", &self.checkpoints());
       ds.finish()
   }
 }
@@ -1187,134 +1188,249 @@ impl core::fmt::Debug for SortedRun<'_> {
       ds.finish()
   }
 }
-pub enum SnapshotOffset {}
+pub enum UuidOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
-pub struct Snapshot<'a> {
+pub struct Uuid<'a> {
   pub _tab: flatbuffers::Table<'a>,
 }
 
-impl<'a> flatbuffers::Follow<'a> for Snapshot<'a> {
-  type Inner = Snapshot<'a>;
+impl<'a> flatbuffers::Follow<'a> for Uuid<'a> {
+  type Inner = Uuid<'a>;
   #[inline]
   unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
     Self { _tab: flatbuffers::Table::new(buf, loc) }
   }
 }
 
-impl<'a> Snapshot<'a> {
-  pub const VT_ID: flatbuffers::VOffsetT = 4;
-  pub const VT_MANIFEST_ID: flatbuffers::VOffsetT = 6;
-  pub const VT_SNAPSHOT_EXPIRE_TIME_S: flatbuffers::VOffsetT = 8;
+impl<'a> Uuid<'a> {
+  pub const VT_HIGH: flatbuffers::VOffsetT = 4;
+  pub const VT_LOW: flatbuffers::VOffsetT = 6;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    Snapshot { _tab: table }
+    Uuid { _tab: table }
   }
   #[allow(unused_mut)]
   pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args SnapshotArgs
-  ) -> flatbuffers::WIPOffset<Snapshot<'bldr>> {
-    let mut builder = SnapshotBuilder::new(_fbb);
-    builder.add_manifest_id(args.manifest_id);
-    builder.add_id(args.id);
-    builder.add_snapshot_expire_time_s(args.snapshot_expire_time_s);
+    args: &'args UuidArgs
+  ) -> flatbuffers::WIPOffset<Uuid<'bldr>> {
+    let mut builder = UuidBuilder::new(_fbb);
+    builder.add_low(args.low);
+    builder.add_high(args.high);
     builder.finish()
   }
 
 
   #[inline]
-  pub fn id(&self) -> u64 {
+  pub fn high(&self) -> u64 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(Snapshot::VT_ID, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(Uuid::VT_HIGH, Some(0)).unwrap()}
   }
   #[inline]
-  pub fn manifest_id(&self) -> u64 {
+  pub fn low(&self) -> u64 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<u64>(Snapshot::VT_MANIFEST_ID, Some(0)).unwrap()}
-  }
-  #[inline]
-  pub fn snapshot_expire_time_s(&self) -> u32 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(Snapshot::VT_SNAPSHOT_EXPIRE_TIME_S, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(Uuid::VT_LOW, Some(0)).unwrap()}
   }
 }
 
-impl flatbuffers::Verifiable for Snapshot<'_> {
+impl flatbuffers::Verifiable for Uuid<'_> {
   #[inline]
   fn run_verifier(
     v: &mut flatbuffers::Verifier, pos: usize
   ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
-     .visit_field::<u64>("id", Self::VT_ID, false)?
-     .visit_field::<u64>("manifest_id", Self::VT_MANIFEST_ID, false)?
-     .visit_field::<u32>("snapshot_expire_time_s", Self::VT_SNAPSHOT_EXPIRE_TIME_S, false)?
+     .visit_field::<u64>("high", Self::VT_HIGH, false)?
+     .visit_field::<u64>("low", Self::VT_LOW, false)?
      .finish();
     Ok(())
   }
 }
-pub struct SnapshotArgs {
-    pub id: u64,
-    pub manifest_id: u64,
-    pub snapshot_expire_time_s: u32,
+pub struct UuidArgs {
+    pub high: u64,
+    pub low: u64,
 }
-impl<'a> Default for SnapshotArgs {
+impl<'a> Default for UuidArgs {
   #[inline]
   fn default() -> Self {
-    SnapshotArgs {
-      id: 0,
-      manifest_id: 0,
-      snapshot_expire_time_s: 0,
+    UuidArgs {
+      high: 0,
+      low: 0,
     }
   }
 }
 
-pub struct SnapshotBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+pub struct UuidBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
   fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
   start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
 }
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> SnapshotBuilder<'a, 'b, A> {
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> UuidBuilder<'a, 'b, A> {
   #[inline]
-  pub fn add_id(&mut self, id: u64) {
-    self.fbb_.push_slot::<u64>(Snapshot::VT_ID, id, 0);
+  pub fn add_high(&mut self, high: u64) {
+    self.fbb_.push_slot::<u64>(Uuid::VT_HIGH, high, 0);
   }
   #[inline]
-  pub fn add_manifest_id(&mut self, manifest_id: u64) {
-    self.fbb_.push_slot::<u64>(Snapshot::VT_MANIFEST_ID, manifest_id, 0);
+  pub fn add_low(&mut self, low: u64) {
+    self.fbb_.push_slot::<u64>(Uuid::VT_LOW, low, 0);
   }
   #[inline]
-  pub fn add_snapshot_expire_time_s(&mut self, snapshot_expire_time_s: u32) {
-    self.fbb_.push_slot::<u32>(Snapshot::VT_SNAPSHOT_EXPIRE_TIME_S, snapshot_expire_time_s, 0);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> SnapshotBuilder<'a, 'b, A> {
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> UuidBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
-    SnapshotBuilder {
+    UuidBuilder {
       fbb_: _fbb,
       start_: start,
     }
   }
   #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<Snapshot<'a>> {
+  pub fn finish(self) -> flatbuffers::WIPOffset<Uuid<'a>> {
     let o = self.fbb_.end_table(self.start_);
     flatbuffers::WIPOffset::new(o.value())
   }
 }
 
-impl core::fmt::Debug for Snapshot<'_> {
+impl core::fmt::Debug for Uuid<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("Snapshot");
+    let mut ds = f.debug_struct("Uuid");
+      ds.field("high", &self.high());
+      ds.field("low", &self.low());
+      ds.finish()
+  }
+}
+pub enum CheckpointOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct Checkpoint<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for Checkpoint<'a> {
+  type Inner = Checkpoint<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> Checkpoint<'a> {
+  pub const VT_ID: flatbuffers::VOffsetT = 4;
+  pub const VT_MANIFEST_ID: flatbuffers::VOffsetT = 6;
+  pub const VT_CHECKPOINT_EXPIRE_TIME_S: flatbuffers::VOffsetT = 8;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    Checkpoint { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args CheckpointArgs<'args>
+  ) -> flatbuffers::WIPOffset<Checkpoint<'bldr>> {
+    let mut builder = CheckpointBuilder::new(_fbb);
+    builder.add_manifest_id(args.manifest_id);
+    builder.add_checkpoint_expire_time_s(args.checkpoint_expire_time_s);
+    if let Some(x) = args.id { builder.add_id(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn id(&self) -> Uuid<'a> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<Uuid>>(Checkpoint::VT_ID, None).unwrap()}
+  }
+  #[inline]
+  pub fn manifest_id(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(Checkpoint::VT_MANIFEST_ID, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn checkpoint_expire_time_s(&self) -> u32 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u32>(Checkpoint::VT_CHECKPOINT_EXPIRE_TIME_S, Some(0)).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for Checkpoint<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<flatbuffers::ForwardsUOffset<Uuid>>("id", Self::VT_ID, true)?
+     .visit_field::<u64>("manifest_id", Self::VT_MANIFEST_ID, false)?
+     .visit_field::<u32>("checkpoint_expire_time_s", Self::VT_CHECKPOINT_EXPIRE_TIME_S, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct CheckpointArgs<'a> {
+    pub id: Option<flatbuffers::WIPOffset<Uuid<'a>>>,
+    pub manifest_id: u64,
+    pub checkpoint_expire_time_s: u32,
+}
+impl<'a> Default for CheckpointArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    CheckpointArgs {
+      id: None, // required field
+      manifest_id: 0,
+      checkpoint_expire_time_s: 0,
+    }
+  }
+}
+
+pub struct CheckpointBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> CheckpointBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_id(&mut self, id: flatbuffers::WIPOffset<Uuid<'b >>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Uuid>>(Checkpoint::VT_ID, id);
+  }
+  #[inline]
+  pub fn add_manifest_id(&mut self, manifest_id: u64) {
+    self.fbb_.push_slot::<u64>(Checkpoint::VT_MANIFEST_ID, manifest_id, 0);
+  }
+  #[inline]
+  pub fn add_checkpoint_expire_time_s(&mut self, checkpoint_expire_time_s: u32) {
+    self.fbb_.push_slot::<u32>(Checkpoint::VT_CHECKPOINT_EXPIRE_TIME_S, checkpoint_expire_time_s, 0);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> CheckpointBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    CheckpointBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<Checkpoint<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, Checkpoint::VT_ID,"id");
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for Checkpoint<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("Checkpoint");
       ds.field("id", &self.id());
       ds.field("manifest_id", &self.manifest_id());
-      ds.field("snapshot_expire_time_s", &self.snapshot_expire_time_s());
+      ds.field("checkpoint_expire_time_s", &self.checkpoint_expire_time_s());
       ds.finish()
   }
 }

@@ -26,8 +26,8 @@ table ManifestV1 {
     // A list of the sorted runs that are valid to read in the `compacted` folder.
     compacted: [SortedRun] (required);
 
-    // A list of read snapshots that are currently open.
-    snapshots: [Snapshot];
+    // A list of checkpoints that are currently open.
+    checkpoints: [Checkpoint] (required);
 }
 
 table SortedRun {
@@ -35,16 +35,21 @@ table SortedRun {
     ssts: [CompactedSsTable] (required);
 }
 
-// Snapshot reference to be included in manifest to record active snapshots.
-table Snapshot {
+table Uuid {
+    high: uint64;
+    low: uint64;
+}
+
+// Checkpoint reference to be included in manifest to record active checkpoints.
+table Checkpoint {
     // Id that must be unique across all open snapshots.
-    id: ulong;
+    id: Uuid (required);
 
     // The manifest ID that this snapshot is using as its `DbState`.
     manifest_id: ulong;
 
-    // The UTC unix timestamp seconds that a snapshot expires at. Clients may update this value.
-    // If `snapshot_expire_time_s` is older than now(), the snapshot is considered expired.
-    // If `snapshot_expire_time_s` is 0, the snapshot will never expire.
-    snapshot_expire_time_s: uint;
+    // The UTC unix timestamp seconds that a checkpoint expires at. Clients may update this value.
+    // If `checkpoint_expire_time_s` is older than now(), the checkpoint is considered expired.
+    // If `checkpoint_expire_time_s` is 0, the checkpoint will never expire.
+    checkpoint_expire_time_s: uint;
 }

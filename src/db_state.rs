@@ -2,8 +2,10 @@ use bytes::Bytes;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tracing::debug;
+use std::time::SystemTime;
+use tracing::{debug, info};
 use ulid::Ulid;
+use uuid::Uuid;
 use SsTableId::{Compacted, Wal};
 
 use crate::config::CompressionCodec;
@@ -41,6 +43,13 @@ impl AsRef<SsTableHandle> for SsTableHandle {
     fn as_ref(&self) -> &SsTableHandle {
         self
     }
+}
+
+#[derive(Clone, PartialEq, Serialize)]
+pub(crate) struct Checkpoint {
+    pub(crate) id: Uuid,
+    pub(crate) manifest_id: u64,
+    pub(crate) expire_time: Option<SystemTime>,
 }
 
 #[derive(Clone, PartialEq, Debug, Hash, Eq, Copy, Serialize)]
@@ -157,6 +166,7 @@ pub(crate) struct CoreDbState {
     pub(crate) compacted: Vec<SortedRun>,
     pub(crate) next_wal_sst_id: u64,
     pub(crate) last_compacted_wal_sst_id: u64,
+    pub(crate) checkpoints: Vec<Checkpoint>,
 }
 
 impl CoreDbState {
@@ -167,6 +177,7 @@ impl CoreDbState {
             compacted: vec![],
             next_wal_sst_id: 1,
             last_compacted_wal_sst_id: 0,
+            checkpoints: vec![],
         }
     }
 

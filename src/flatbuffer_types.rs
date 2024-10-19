@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::{Duration, UNIX_EPOCH};
 
 use bytes::Bytes;
 use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, InvalidFlatbuffer, Vector, WIPOffset};
@@ -13,7 +14,7 @@ use crate::db_state::{CoreDbState, SsTableHandle};
 mod manifest_generated;
 pub use manifest_generated::{
     BlockMeta, BlockMetaArgs, ManifestV1, ManifestV1Args, SsTableIndex, SsTableIndexArgs,
-    SsTableInfo as FbSsTableInfo, SsTableInfoArgs,
+    SsTableInfo as FbSsTableInfo, SsTableInfoArgs, Uuid,
 };
 
 use crate::config::CompressionCodec;
@@ -21,8 +22,8 @@ use crate::db_state::SsTableId;
 use crate::db_state::SsTableId::Compacted;
 use crate::error::SlateDBError;
 use crate::flatbuffer_types::manifest_generated::{
-    CompactedSsTable, CompactedSsTableArgs, CompactedSstId, CompactedSstIdArgs, CompressionFormat,
-    SortedRun, SortedRunArgs, SstRowFeature,
+    Checkpoint, CheckpointArgs, CompactedSsTable, CompactedSsTableArgs, CompactedSstId,
+    CompactedSstIdArgs, CompressionFormat, SortedRun, SortedRunArgs, SstRowFeature, UuidArgs
 };
 use crate::manifest::{Manifest, ManifestCodec};
 
@@ -135,12 +136,26 @@ impl FlatBufferManifestCodec {
                 ssts,
             })
         }
+        let checkpoints: Vec<db_state::Checkpoint> = manifest
+            .checkpoints()
+            .iter()
+            .map(|cp| db_state::Checkpoint {
+                id: uuid::Uuid::from_u64_pair(cp.id().high(), cp.id().low()),
+                manifest_id: cp.manifest_id(),
+                expire_time: if cp.checkpoint_expire_time_s() == 0 {
+                    None
+                } else {
+                    Some(UNIX_EPOCH + Duration::from_secs(cp.checkpoint_expire_time_s() as u64))
+                },
+            })
+            .collect();
         let core = CoreDbState {
             l0_last_compacted,
             l0,
             compacted,
             next_wal_sst_id: manifest.wal_id_last_seen() + 1,
             last_compacted_wal_sst_id: manifest.wal_id_last_compacted(),
+            checkpoints,
         };
         Manifest {
             core,
@@ -264,6 +279,40 @@ impl<'b> DbFlatBufferBuilder<'b> {
         self.builder.create_vector(sorted_runs_fbs.as_ref())
     }
 
+    fn add_uuid(&mut self, uuid: uuid::Uuid) -> WIPOffset<Uuid<'b>> {
+        let (high, low) = uuid.as_u64_pair();
+        Uuid::create(&mut self.builder, &UuidArgs { high, low })
+    }
+
+    fn add_checkpoint(&mut self, checkpoint: &db_state::Checkpoint) -> WIPOffset<Checkpoint<'b>> {
+        let id = self.add_uuid(checkpoint.id);
+        let checkpoint_expire_time_s = checkpoint
+            .expire_time
+            .map(|t| {
+                t.duration_since(UNIX_EPOCH)
+                    .expect("manifest expire time cannot be earlier than epoch")
+                    .as_secs()
+            })
+            .unwrap_or(0) as u32;
+        Checkpoint::create(
+            &mut self.builder,
+            &CheckpointArgs {
+                id: Some(id),
+                manifest_id: checkpoint.manifest_id,
+                checkpoint_expire_time_s,
+            },
+        )
+    }
+
+    fn add_checkpoints(
+        &mut self,
+        checkpoints: &[db_state::Checkpoint],
+    ) -> WIPOffset<Vector<'b, ForwardsUOffset<Checkpoint<'b>>>> {
+        let checkpoints_fb_vec: Vec<WIPOffset<Checkpoint>> =
+            checkpoints.iter().map(|c| self.add_checkpoint(c)).collect();
+        self.builder.create_vector(checkpoints_fb_vec.as_ref())
+    }
+
     fn create_manifest(&mut self, manifest: &Manifest) -> Bytes {
         let core = &manifest.core;
         let l0 = self.add_compacted_ssts(core.l0.iter());
@@ -272,6 +321,7 @@ impl<'b> DbFlatBufferBuilder<'b> {
             l0_last_compacted = Some(self.add_compacted_sst_id(ulid))
         }
         let compacted = self.add_sorted_runs(&core.compacted);
+        let checkpoints = self.add_checkpoints(&core.checkpoints);
         let manifest = ManifestV1::create(
             &mut self.builder,
             &ManifestV1Args {
@@ -283,7 +333,7 @@ impl<'b> DbFlatBufferBuilder<'b> {
                 l0_last_compacted,
                 l0: Some(l0),
                 compacted: Some(compacted),
-                snapshots: None,
+                checkpoints: Some(checkpoints),
             },
         );
         self.builder.finish(manifest, None);
