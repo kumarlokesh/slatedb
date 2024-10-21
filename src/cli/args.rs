@@ -1,4 +1,6 @@
+use std::time::Duration;
 use clap::{Parser, Subcommand};
+use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "slatedb")]
@@ -43,6 +45,28 @@ pub(crate) enum CliCommands {
         #[arg(short, long)]
         end: Option<u64>,
     },
+
+    CreateCheckpoint {
+        #[arg(short, long)]
+        #[clap(value_parser = humantime::parse_duration)]
+        lifetime: Option<Duration>,
+    },
+
+    RefreshCheckpoint {
+        #[arg(short, long)]
+        #[clap(value_parser = uuid::Uuid::parse_str)]
+        id: Uuid,
+
+        #[arg(short, long)]
+        #[clap(value_parser = humantime::parse_duration)]
+        lifetime: Option<Duration>,
+    },
+
+    DeleteCheckpoint {
+        #[arg(short, long)]
+        #[clap(value_parser = uuid::Uuid::parse_str)]
+        id: Uuid,
+    }
 }
 
 pub(crate) fn parse_args() -> CliArgs {

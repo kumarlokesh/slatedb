@@ -133,6 +133,10 @@ impl StoredManifest {
         }))
     }
 
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
     pub(crate) fn db_state(&self) -> &CoreDbState {
         &self.manifest.core
     }
