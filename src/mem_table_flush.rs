@@ -7,7 +7,7 @@ use ulid::Ulid;
 use crate::db::DbInner;
 use crate::db_state::SsTableId;
 use crate::error::SlateDBError;
-use crate::manifest_store::FenceableManifest;
+use crate::manifest_store::{FenceableManifest, WritableManifest};
 
 pub(crate) enum MemtableFlushThreadMsg {
     Shutdown,

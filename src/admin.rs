@@ -1,4 +1,4 @@
-use crate::manifest_store::{ManifestStore, StoredManifest};
+use crate::manifest_store::{ManifestStore, StoredManifest, WritableManifest};
 #[cfg(feature = "aws")]
 use log::warn;
 use object_store::path::Path;
@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::db_state::{Checkpoint, DbState};
 use crate::error::SlateDBError;
 use crate::error::SlateDBError::InvalidDBState;
+use crate::manifest_store;
 
 /// read-only access to the latest manifest file
 pub async fn read_manifest(
@@ -48,25 +49,22 @@ pub async fn create_checkpoint(
 ) -> Result<String, Box<dyn Error>> {
     let manifest_store = Arc::new(ManifestStore::new(path, object_store));
     let maybe_stored_manifest = StoredManifest::load(manifest_store).await?;
-    let Some(mut stored_manifest) = maybe_stored_manifest else {
+    let Some(stored_manifest) = maybe_stored_manifest else {
         return Err(Box::new(SlateDBError::ManifestMissing))
     };
-    loop {
-        let mut core_state = stored_manifest.db_state().clone();
-        core_state.checkpoints.push(Checkpoint{
-            id: uuid::Uuid::new_v4(),
-            manifest_id: stored_manifest.id(),
-            expire_time,
-        });
-        return match stored_manifest.update_db_state(core_state).await {
-            Err(SlateDBError::ManifestVersionExists) => {
-                stored_manifest.refresh().await?;
-                continue;
-            },
-            Err(e) => Err(Box::new(e)),
-            Ok(()) => Ok(String::from("checkpoint created successfully"))
-        };
-    }
+    manifest_store::update_manifest(
+        Box::new(stored_manifest),
+        |id, state| {
+            let mut state = state.clone();
+            state.checkpoints.push(Checkpoint{
+                id: uuid::Uuid::new_v4(),
+                manifest_id: id,
+                expire_time,
+            });
+            state
+        }
+    ).await?;
+    Ok(String::from("checkpoint created successfully"))
 }
 
 pub async fn refresh_checkpoint(
@@ -77,31 +75,28 @@ pub async fn refresh_checkpoint(
 ) -> Result<String, Box<dyn Error>> {
     let manifest_store = Arc::new(ManifestStore::new(path, object_store));
     let maybe_stored_manifest = StoredManifest::load(manifest_store).await?;
-    let Some(mut stored_manifest) = maybe_stored_manifest else {
+    let Some(stored_manifest) = maybe_stored_manifest else {
         return Err(Box::new(SlateDBError::ManifestMissing))
     };
-    loop {
-        let mut core_state = stored_manifest.db_state().clone();
-        let mut found = false;
-        for checkpoint in core_state.checkpoints.iter_mut() {
-            if checkpoint.id == id {
-                checkpoint.expire_time = expire_time;
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return Err(Box::new(InvalidDBState))
-        }
-        return match stored_manifest.update_db_state(core_state).await {
-            Err(SlateDBError::ManifestVersionExists) => {
-                stored_manifest.refresh().await?;
-                continue;
-            },
-            Err(e) => Err(Box::new(e)),
-            Ok(()) => Ok(String::from("checkpoint refreshed successfully"))
-        };
+    if stored_manifest.db_state().checkpoints.iter()
+        .find(|c| c.id == id)
+        .is_none() {
+        return Err(Box::new(SlateDBError::InvalidDBState))
     }
+    manifest_store::update_manifest(
+        Box::new(stored_manifest),
+        |_, state| {
+            let mut state = state.clone();
+            for checkpoint in state.checkpoints.iter_mut() {
+                if checkpoint.id == id {
+                    checkpoint.expire_time = expire_time;
+                    break;
+                }
+            }
+            state
+        }
+    ).await?;
+    Ok(String::from("checkpoint refreshed successfully"))
 }
 
 pub async fn delete_checkpoint(
@@ -111,25 +106,22 @@ pub async fn delete_checkpoint(
 ) -> Result<String, Box<dyn Error>> {
     let manifest_store = Arc::new(ManifestStore::new(path, object_store));
     let maybe_stored_manifest = StoredManifest::load(manifest_store).await?;
-    let Some(mut stored_manifest) = maybe_stored_manifest else {
+    let Some(stored_manifest) = maybe_stored_manifest else {
         return Err(Box::new(SlateDBError::ManifestMissing))
     };
-    loop {
-        let mut core_state = stored_manifest.db_state().clone();
-        let checkpoints: Vec<Checkpoint> = core_state.checkpoints.iter()
-            .filter(|c| c.id != id)
-            .cloned()
-            .collect();
-        core_state.checkpoints = checkpoints;
-        return match stored_manifest.update_db_state(core_state).await {
-            Err(SlateDBError::ManifestVersionExists) => {
-                stored_manifest.refresh().await?;
-                continue;
-            },
-            Err(e) => Err(Box::new(e)),
-            Ok(()) => Ok(String::from("checkpoint deleted successfully"))
-        };
-    }
+    manifest_store::update_manifest(
+        Box::new(stored_manifest),
+        |_, state| {
+            let mut state = state.clone();
+            let checkpoints: Vec<Checkpoint> = state.checkpoints.iter()
+                .filter(|c| c.id != id)
+                .cloned()
+                .collect();
+            state.checkpoints = checkpoints;
+            state
+        }
+    ).await?;
+    Ok(String::from("checkpoint deleted successfully"))
 }
 
 /// Loads an object store from configured environment variables.

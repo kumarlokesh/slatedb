@@ -1,5 +1,6 @@
 use std::ops::RangeBounds;
 use std::sync::Arc;
+use async_trait::async_trait;
 
 use chrono::Utc;
 use futures::StreamExt;
@@ -9,7 +10,7 @@ use object_store::{Error, ObjectStore};
 use serde::Serialize;
 use tracing::warn;
 
-use crate::db_state::CoreDbState;
+use crate::db_state::{Checkpoint, CoreDbState};
 use crate::error::SlateDBError;
 use crate::error::SlateDBError::InvalidDBState;
 use crate::flatbuffer_types::FlatBufferManifestCodec;
@@ -17,6 +18,41 @@ use crate::manifest::{Manifest, ManifestCodec};
 use crate::transactional_object_store::{
     DelegatingTransactionalObjectStore, TransactionalObjectStore,
 };
+
+pub(crate) async fn update_manifest<F>(
+    mut manifest: Box<dyn WritableManifest>,
+    mut mutator: F
+) -> Result<(), SlateDBError>
+    where F: FnMut(u64, &CoreDbState) -> CoreDbState
+{
+    loop {
+        let id = manifest.id();
+        let db_state = manifest.db_state()?;
+        let mutated_db_state = mutator(id, db_state);
+        return match manifest.update_db_state(mutated_db_state).await {
+            Err(SlateDBError::ManifestVersionExists) => {
+                manifest.refresh().await?;
+                continue;
+            },
+            Err(e) => Err(e),
+            Ok(()) => Ok(())
+        };
+    }
+}
+
+#[async_trait]
+pub(crate) trait WritableManifest {
+    fn id(&self) -> u64;
+
+    fn db_state(&self) -> Result<&CoreDbState, SlateDBError>;
+
+    async fn refresh(&mut self) -> Result<&CoreDbState, SlateDBError>;
+
+    async fn update_db_state(
+        &mut self,
+        db_state: CoreDbState,
+    ) -> Result<(), SlateDBError>;
+}
 
 pub(crate) struct FenceableManifest {
     stored_manifest: StoredManifest,
@@ -32,7 +68,7 @@ impl FenceableManifest {
         Self::init(stored_manifest, Box::new(|m| m.writer_epoch), |m, e| {
             m.writer_epoch = e
         })
-        .await
+            .await
     }
 
     pub(crate) async fn init_compactor(
@@ -41,7 +77,7 @@ impl FenceableManifest {
         Self::init(stored_manifest, Box::new(|m| m.compactor_epoch), |m, e| {
             m.compactor_epoch = e
         })
-        .await
+            .await
     }
 
     async fn init(
@@ -60,24 +96,6 @@ impl FenceableManifest {
         })
     }
 
-    pub(crate) fn db_state(&self) -> Result<&CoreDbState, SlateDBError> {
-        self.check_epoch()?;
-        Ok(self.stored_manifest.db_state())
-    }
-
-    pub(crate) async fn refresh(&mut self) -> Result<&CoreDbState, SlateDBError> {
-        self.stored_manifest.refresh().await?;
-        self.db_state()
-    }
-
-    pub(crate) async fn update_db_state(
-        &mut self,
-        db_state: CoreDbState,
-    ) -> Result<(), SlateDBError> {
-        self.check_epoch()?;
-        self.stored_manifest.update_db_state(db_state).await
-    }
-
     #[allow(clippy::panic)]
     fn check_epoch(&self) -> Result<(), SlateDBError> {
         let stored_epoch = (self.stored_epoch)(&self.stored_manifest.manifest);
@@ -88,6 +106,31 @@ impl FenceableManifest {
             panic!("the stored epoch is lower than the local epoch")
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl WritableManifest for FenceableManifest {
+    fn id(&self) -> u64 {
+        self.stored_manifest.id()
+    }
+
+    fn db_state(&self) -> Result<&CoreDbState, SlateDBError> {
+        self.check_epoch()?;
+        Ok(self.stored_manifest.db_state())
+    }
+
+    async fn refresh(&mut self) -> Result<&CoreDbState, SlateDBError> {
+        self.stored_manifest.refresh().await?;
+        self.db_state()
+    }
+
+    async fn update_db_state(
+        &mut self,
+        db_state: CoreDbState,
+    ) -> Result<(), SlateDBError> {
+        self.check_epoch()?;
+        self.stored_manifest.update_db_state(db_state).await
     }
 }
 
@@ -133,32 +176,6 @@ impl StoredManifest {
         }))
     }
 
-    pub(crate) fn id(&self) -> u64 {
-        self.id
-    }
-
-    pub(crate) fn db_state(&self) -> &CoreDbState {
-        &self.manifest.core
-    }
-
-    pub(crate) async fn refresh(&mut self) -> Result<&CoreDbState, SlateDBError> {
-        let Some((id, manifest)) = self.manifest_store.read_latest_manifest().await? else {
-            return Err(InvalidDBState);
-        };
-        self.manifest = manifest;
-        self.id = id;
-        Ok(&self.manifest.core)
-    }
-
-    pub(crate) async fn update_db_state(&mut self, core: CoreDbState) -> Result<(), SlateDBError> {
-        let manifest = Manifest {
-            core,
-            writer_epoch: self.manifest.writer_epoch,
-            compactor_epoch: self.manifest.compactor_epoch,
-        };
-        self.update_manifest(manifest).await
-    }
-
     async fn update_manifest(&mut self, manifest: Manifest) -> Result<(), SlateDBError> {
         let new_id = self.id + 1;
         self.manifest_store
@@ -167,6 +184,35 @@ impl StoredManifest {
         self.manifest = manifest;
         self.id = new_id;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl WritableManifest for StoredManifest {
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn db_state(&self) -> &CoreDbState {
+        &self.manifest.core
+    }
+
+    async fn refresh(&mut self) -> Result<&CoreDbState, SlateDBError> {
+        let Some((id, manifest)) = self.manifest_store.read_latest_manifest().await? else {
+            return Err(InvalidDBState);
+        };
+        self.manifest = manifest;
+        self.id = id;
+        Ok(&self.manifest.core)
+    }
+
+    async fn update_db_state(&mut self, core: CoreDbState) -> Result<(), SlateDBError> {
+        let manifest = Manifest {
+            core,
+            writer_epoch: self.manifest.writer_epoch,
+            compactor_epoch: self.manifest.compactor_epoch,
+        };
+        self.update_manifest(manifest).await
     }
 }
 
@@ -335,7 +381,7 @@ mod tests {
 
     use crate::db_state::CoreDbState;
     use crate::error;
-    use crate::manifest_store::{FenceableManifest, ManifestStore, StoredManifest};
+    use crate::manifest_store::{FenceableManifest, ManifestStore, StoredManifest, WritableManifest};
 
     const ROOT: &str = "/root/path";
 

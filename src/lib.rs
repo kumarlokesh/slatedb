@@ -43,3 +43,4 @@ mod tablestore;
 mod test_utils;
 mod transactional_object_store;
 mod types;
+mod manifest_sync;

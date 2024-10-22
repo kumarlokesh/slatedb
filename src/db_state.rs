@@ -144,19 +144,9 @@ impl SortedRun {
     }
 }
 
-pub(crate) struct DbState {
-    memtable: WritableKVTable,
-    wal: WritableKVTable,
-    state: Arc<COWDbState>,
-}
 
-// represents the state that is mutated by creating a new copy with the mutations
-#[derive(Clone)]
-pub(crate) struct COWDbState {
-    pub(crate) imm_memtable: VecDeque<Arc<ImmutableMemtable>>,
-    pub(crate) imm_wal: VecDeque<Arc<ImmutableWal>>,
-    pub(crate) core: CoreDbState,
-}
+
+
 
 // represents the core db state that we persist in the manifest
 #[derive(Clone, PartialEq, Serialize)]
@@ -196,6 +186,14 @@ impl CoreDbState {
     }
 }
 
+// represents the state that is mutated by creating a new copy with the mutations
+#[derive(Clone)]
+pub(crate) struct COWDbState {
+    pub(crate) imm_memtable: VecDeque<Arc<ImmutableMemtable>>,
+    pub(crate) imm_wal: VecDeque<Arc<ImmutableWal>>,
+    pub(crate) core: CoreDbState,
+}
+
 // represents a read-snapshot of the current db state
 #[derive(Clone)]
 pub(crate) struct DbStateSnapshot {
@@ -204,8 +202,33 @@ pub(crate) struct DbStateSnapshot {
     pub(crate) state: Arc<COWDbState>,
 }
 
+pub(crate) struct DbState {
+    memtable: WritableKVTable,
+    wal: WritableKVTable,
+    state: Arc<COWDbState>,
+    next_wal_sst_id: u64,
+    log: VecDeque<StateMutationEntry>,
+    next_seq_num: u64,
+}
+
+enum StateMutation {
+    SetNextWalSstId{ next_wal_sst_id: u64 },
+    MoveImmMemtableToL0 { imm_memtable: Arc<ImmutableMemtable>, sst_handle: SsTableHandle }
+}
+
+struct StateMutationEntry {
+    mutation: StateMutation,
+    seq_num: u64,
+}
+
+struct CoreDbStateUpdate {
+    state: CoreDbState,
+    seq_num: u64,
+}
+
 impl DbState {
     pub fn new(core_db_state: CoreDbState) -> Self {
+        let next_wal_sst_id = core_db_state.next_wal_sst_id;
         Self {
             memtable: WritableKVTable::new(),
             wal: WritableKVTable::new(),
@@ -214,6 +237,9 @@ impl DbState {
                 imm_wal: VecDeque::new(),
                 core: core_db_state,
             }),
+            log: VecDeque::new(),
+            next_seq_num: 1,
+            next_wal_sst_id,
         }
     }
 
@@ -230,11 +256,20 @@ impl DbState {
     }
 
     pub fn last_written_wal_id(&self) -> u64 {
-        assert!(self.state.core.next_wal_sst_id > 0);
-        self.state.core.next_wal_sst_id - 1
+        assert!(self.next_wal_sst_id > 0);
+        self.next_wal_sst_id - 1
     }
 
     // mutations
+
+    fn log_mutation(&mut self, mutation: StateMutation) {
+        let seq_num = self.next_seq_num;
+        self.next_seq_num += 1;
+        self.log.push_back(StateMutationEntry{
+            seq_num,
+            mutation,
+        })
+    }
 
     pub fn wal(&mut self) -> &mut WritableKVTable {
         &mut self.wal
@@ -250,6 +285,51 @@ impl DbState {
 
     fn update_state(&mut self, state: COWDbState) {
         self.state = Arc::new(state);
+    }
+
+    fn apply_mutation_to_coredb_state(mutation: &StateMutation, state: &mut CoreDbState) {
+        match mutation {
+            StateMutation::SetNextWalSstId { next_wal_sst_id } => {
+                state.next_wal_sst_id = *next_wal_sst_id;
+            }
+            StateMutation::MoveImmMemtableToL0 { imm_memtable, sst_handle } => {
+                state.l0.push_front(sst_handle.clone());
+                state.last_compacted_wal_sst_id = imm_memtable.last_wal_id();
+            }
+        }
+    }
+
+    fn apply_mutation(&mut self, mutation: StateMutation) {
+        let mut state_copy = self.state_copy();
+        Self::apply_mutation_to_coredb_state(&mutation, &mut state_copy.core);
+        match mutation {
+            StateMutation::MoveImmMemtableToL0 { imm_memtable, sst_handle } => {
+                let popped = state_copy.imm_memtable.pop_back().expect("expected memtable");
+                assert!(Arc::ptr_eq(&imm_memtable, &popped))
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_log_to_core_db_state(&self) -> CoreDbState {
+        let mut state = self.state().core.clone();
+        for mutation in self.log.iter() {
+            Self::apply_mutation_to_coredb_state(&mutation.mutation, &mut state);
+        }
+        state
+    }
+
+    fn apply_log(&mut self, until_seq_num: u64) {
+        loop {
+            let Some(front) = self.log.front() else {
+                break;
+            };
+            if front.seq_num > until_seq_num {
+                break;
+            }
+            let front = self.log.pop_front().expect("unreachable");
+            self.apply_mutation(front.mutation);
+        }
     }
 
     pub fn freeze_memtable(&mut self, wal_id: u64) {
@@ -270,8 +350,9 @@ impl DbState {
         let imm_wal = Arc::new(ImmutableWal::new(state.core.next_wal_sst_id, old_wal));
         let id = imm_wal.id();
         state.imm_wal.push_front(imm_wal);
-        state.core.next_wal_sst_id += 1;
         self.update_state(state);
+        self.next_wal_sst_id += 1;
+        self.log_mutation(StateMutation::SetNextWalSstId { next_wal_sst_id: self.next_wal_sst_id });
         Some(id)
     }
 
@@ -286,24 +367,37 @@ impl DbState {
         imm_memtable: Arc<ImmutableMemtable>,
         sst_handle: SsTableHandle,
     ) {
-        let mut state = self.state_copy();
-        let popped = state
-            .imm_memtable
-            .pop_back()
-            .expect("expected imm memtable");
-        assert!(Arc::ptr_eq(&popped, &imm_memtable));
-        state.core.l0.push_front(sst_handle);
-        state.core.last_compacted_wal_sst_id = imm_memtable.last_wal_id();
-        self.update_state(state);
+        self.log_mutation(StateMutation::MoveImmMemtableToL0 {imm_memtable, sst_handle});
     }
 
     pub fn increment_next_wal_id(&mut self) {
-        let mut state = self.state_copy();
-        state.core.next_wal_sst_id += 1;
-        self.update_state(state);
+        self.next_wal_sst_id += 1;
+        self.log_mutation(StateMutation::SetNextWalSstId { next_wal_sst_id: self.next_wal_sst_id });
+    }
+
+    pub fn prepare_update(&self) -> Option<CoreDbStateUpdate> {
+
+    }
+
+    pub fn merge_from_remote(&mut self, remote_state: &CoreDbState) -> Option<CoreDbStateUpdate> {
+        // todo: if remote state is different, establish new checkpoint and remove
+        //       current checkpoint
+
+    }
+
+    pub fn apply_update(&mut self, update: CoreDbStateUpdate) {
+
     }
 
     pub fn refresh_db_state(&mut self, compactor_state: &CoreDbState) {
+        // copy over L0 up to l0_last_compacted
+        let mut state = self.state_copy();
+        state.core = self.merge_db_state(compactor_state);
+        self.update_state(state)
+    }
+
+    // TODO: move to reader section
+    pub fn merge_db_state(&self, compactor_state: &CoreDbState) -> CoreDbState {
         // copy over L0 up to l0_last_compacted
         let l0_last_compacted = &compactor_state.l0_last_compacted;
         let mut new_l0 = VecDeque::new();
@@ -316,11 +410,11 @@ impl DbState {
             new_l0.push_back(sst.clone());
         }
         let compacted = compactor_state.compacted.clone();
-        let mut state = self.state_copy();
-        state.core.l0_last_compacted.clone_from(l0_last_compacted);
-        state.core.l0 = new_l0;
-        state.core.compacted = compacted;
-        self.update_state(state);
+        let mut core = self.state.core.clone();
+        core.l0_last_compacted.clone_from(l0_last_compacted);
+        core.l0 = new_l0;
+        core.compacted = compacted;
+        core
     }
 }
 
