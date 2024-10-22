@@ -35,6 +35,12 @@ table SortedRun {
     ssts: [CompactedSsTable] (required);
 }
 
+table WriterCheckpointMetadata {
+    epoch: u64;
+}
+
+union CheckpointMetadata { WriterCheckpointMetadata }
+
 table Uuid {
     high: uint64;
     low: uint64;
@@ -52,4 +58,7 @@ table Checkpoint {
     // If `checkpoint_expire_time_s` is older than now(), the checkpoint is considered expired.
     // If `checkpoint_expire_time_s` is 0, the checkpoint will never expire.
     checkpoint_expire_time_s: uint;
+
+    // Optional metadata associated with the checkpoint
+    metadata: CheckpointMetadata;
 }
