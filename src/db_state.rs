@@ -207,7 +207,7 @@ pub(crate) struct DbState {
     wal: WritableKVTable,
     state: Arc<COWDbState>,
     next_wal_sst_id: u64,
-    log: VecDeque<StateMutationEntry>,
+    coredb_state_update_log: VecDeque<StateMutationEntry>,
     next_seq_num: u64,
 }
 
@@ -237,7 +237,7 @@ impl DbState {
                 imm_wal: VecDeque::new(),
                 core: core_db_state,
             }),
-            log: VecDeque::new(),
+            coredb_state_update_log: VecDeque::new(),
             next_seq_num: 1,
             next_wal_sst_id,
         }
@@ -256,6 +256,7 @@ impl DbState {
     }
 
     pub fn last_written_wal_id(&self) -> u64 {
+        // todo: fix me - this is not the last written wal id
         assert!(self.next_wal_sst_id > 0);
         self.next_wal_sst_id - 1
     }
@@ -265,7 +266,7 @@ impl DbState {
     fn log_mutation(&mut self, mutation: StateMutation) {
         let seq_num = self.next_seq_num;
         self.next_seq_num += 1;
-        self.log.push_back(StateMutationEntry{
+        self.coredb_state_update_log.push_back(StateMutationEntry{
             seq_num,
             mutation,
         })
@@ -313,7 +314,7 @@ impl DbState {
 
     fn apply_log_to_core_db_state(&self) -> CoreDbState {
         let mut state = self.state().core.clone();
-        for mutation in self.log.iter() {
+        for mutation in self.coredb_state_update_log.iter() {
             Self::apply_mutation_to_coredb_state(&mutation.mutation, &mut state);
         }
         state
@@ -321,13 +322,13 @@ impl DbState {
 
     fn apply_log(&mut self, until_seq_num: u64) {
         loop {
-            let Some(front) = self.log.front() else {
+            let Some(front) = self.coredb_state_update_log.front() else {
                 break;
             };
             if front.seq_num > until_seq_num {
                 break;
             }
-            let front = self.log.pop_front().expect("unreachable");
+            let front = self.coredb_state_update_log.pop_front().expect("unreachable");
             self.apply_mutation(front.mutation);
         }
     }
@@ -352,13 +353,14 @@ impl DbState {
         state.imm_wal.push_front(imm_wal);
         self.update_state(state);
         self.next_wal_sst_id += 1;
-        self.log_mutation(StateMutation::SetNextWalSstId { next_wal_sst_id: self.next_wal_sst_id });
         Some(id)
     }
 
     pub fn pop_imm_wal(&mut self) {
         let mut state = self.state_copy();
-        state.imm_wal.pop_back();
+        let imm_wal = state.imm_wal.pop_back().expect("expected wal");
+        let wal_id = imm_wal.id();
+        self.log_mutation(StateMutation::SetNextWalSstId { next_wal_sst_id:  wal_id + 1});
         self.update_state(state);
     }
 
@@ -385,7 +387,7 @@ impl DbState {
 
     }
 
-    pub fn apply_update(&mut self, update: CoreDbStateUpdate) {
+    pub fn on_update_applied(&mut self, update: CoreDbStateUpdate) {
 
     }
 
